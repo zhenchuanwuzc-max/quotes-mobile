@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>金句库</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#fdfcf7">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="金句">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+    background: #fdfcf7;
+    color: #333;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  h1 {
+    font-family: Georgia, "Times New Roman", "PingFang SC", serif;
+    font-size: 22px;
+  }
+  /* ---- token 输入屏 ---- */
+  #tokenView {
+    max-width: 420px; margin: 0 auto;
+    padding: calc(80px + env(safe-area-inset-top)) 24px 24px;
+    text-align: center;
+  }
+  #tokenView p { color: #888; font-size: 13px; margin: 12px 0 20px; line-height: 1.6; }
+  #tokenErr { color: #c0392b; font-size: 13px; min-height: 18px; margin-bottom: 8px; }
+  #tokenInput {
+    width: 100%; padding: 12px 14px; font-size: 16px;
+    border: 1px solid #e5dfd0; border-radius: 8px; background: #fffefb;
+    outline: none;
+  }
+  #tokenSave {
+    width: 100%; margin-top: 12px; padding: 12px;
+    font-size: 16px; border: none; border-radius: 8px;
+    background: #28a745; color: #fff;
+  }
+  /* ---- 列表屏 ---- */
+  header {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; gap: 8px; align-items: center;
+    padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+    background: #fdfcf7; border-bottom: 1px solid #efe9d8;
+  }
+  #search {
+    flex: 1; padding: 9px 14px; font-size: 16px;
+    border: 1px solid #e5dfd0; border-radius: 20px; background: #fffefb;
+    outline: none; -webkit-appearance: none;
+  }
+  #refreshBtn {
+    width: 38px; height: 38px; flex: none;
+    font-size: 18px; border: 1px solid #e5dfd0; border-radius: 50%;
+    background: #fffefb; color: #777;
+  }
+  #banner {
+    margin: 10px 14px 0; padding: 8px 12px;
+    background: #fff8e1; border: 1px solid #f0e3b0; border-radius: 8px;
+    color: #8a6d1a; font-size: 12px; line-height: 1.5;
+  }
+  #meta { padding: 10px 16px 2px; color: #aaa; font-size: 12px; }
+  #list { padding: 6px 12px 30px; }
+  .card {
+    background: #fffefb; border: 1px solid #e5dfd0; border-radius: 10px;
+    padding: 13px 15px; margin-top: 10px;
+    -webkit-tap-highlight-color: rgba(40,167,69,.12);
+  }
+  .card .text { font-size: 15px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+  .card .sub { color: #999; font-size: 12px; margin-top: 7px; }
+  .empty { text-align: center; color: #bbb; font-size: 14px; padding: 50px 0; }
+  /* ---- toast ---- */
+  #toast {
+    position: fixed; left: 50%; bottom: calc(40px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    background: rgba(40,40,40,.92); color: #fff;
+    padding: 9px 20px; border-radius: 20px; font-size: 14px;
+    opacity: 0; pointer-events: none; transition: opacity .25s;
+    white-space: nowrap; z-index: 99;
+  }
+  #toast.show { opacity: 1; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="tokenView" hidden>
+  <h1>金句库</h1>
+  <p>输入 GitHub PAT 解锁（只需一次，仅存在本机浏览器，仅发往 api.github.com）</p>
+  <div id="tokenErr"></div>
+  <input id="tokenInput" type="password" placeholder="github_pat_…" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">
+  <button id="tokenSave">解锁</button>
+</div>
+
+<div id="listView" hidden>
+  <header>
+    <input id="search" type="search" placeholder="搜金句 / 来源 / 用途" autocapitalize="off" autocomplete="off">
+    <button id="refreshBtn" title="刷新">⟳</button>
+  </header>
+  <div id="banner" hidden></div>
+  <div id="meta"></div>
+  <div id="list"></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+var API = 'https://api.github.com/repos/zhenchuanwuzc-max/quotes-app-data/contents/quotes.json';
+var LS_PAT = 'qm_pat', LS_CACHE = 'qm_cache';
+var quotes = [], updated = '', fetchedAt = '';
+
+function $(id) { return document.getElementById(id); }
+
+function fmt(iso) {
+  if (!iso) return '—';
+  var d = new Date(iso);
+  if (isNaN(d)) return '—';
+  function p(n) { return (n < 10 ? '0' : '') + n; }
+  return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+function showToken(err) {
+  $('tokenView').hidden = false;
+  $('listView').hidden = true;
+  $('tokenErr').textContent = err || '';
+  $('tokenInput').value = '';
+}
+function showList() {
+  $('tokenView').hidden = true;
+  $('listView').hidden = false;
+}
+function showBanner(msg) { $('banner').textContent = msg; $('banner').hidden = false; }
+function hideBanner() { $('banner').hidden = true; }
+
+var toastTimer = null;
+function toast(msg) {
+  var t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.classList.remove('show'); }, 1400);
+}
+
+function loadCache() {
+  try {
+    var c = JSON.parse(localStorage.getItem(LS_CACHE) || 'null');
+    if (c && Array.isArray(c.quotes)) {
+      quotes = c.quotes; updated = c.updated || ''; fetchedAt = c.fetchedAt || '';
+      return true;
+    }
+  } catch (e) { /* 坏缓存当无缓存 */ }
+  return false;
+}
+
+function render() {
+  var q = $('search').value.trim().toLowerCase();
+  var filtered = quotes.filter(function (x) {
+    if (!q) return true;
+    return [x.text, x.source, x.use_case].some(function (f) {
+      return (f || '').toLowerCase().indexOf(q) !== -1;
+    });
+  });
+  filtered.sort(function (a, b) {
+    var pin = (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
+    if (pin) return pin;
+    return (b.created_at || '').localeCompare(a.created_at || '');
+  });
+
+  var list = $('list');
+  list.replaceChildren();
+  if (!filtered.length) {
+    var e = document.createElement('div');
+    e.className = 'empty';
+    e.textContent = quotes.length ? '没搜到' : '库是空的';
+    list.appendChild(e);
+  }
+  filtered.forEach(function (x) {
+    var card = document.createElement('div');
+    card.className = 'card';
+    var t = document.createElement('div');
+    t.className = 'text';
+    /* 安全红线：金句字段一律 textContent，禁止 innerHTML（PAT 带写权限，焊死 XSS） */
+    t.textContent = (x.pinned ? '⭐ ' : '') + (x.text || '');
+    card.appendChild(t);
+    var subText = [x.source, x.use_case].filter(Boolean).join(' · ');
+    if (subText) {
+      var m = document.createElement('div');
+      m.className = 'sub';
+      m.textContent = subText;
+      card.appendChild(m);
+    }
+    card.addEventListener('click', function () { copyText(x.text || ''); });
+    list.appendChild(card);
+  });
+  $('meta').textContent = filtered.length + '/' + quotes.length + ' 条 · 数据更新 ' + fmt(updated) + ' · 拉取 ' + fmt(fetchedAt);
+}
+
+function copyText(text) {
+  function fallback() {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { /* noop */ }
+    document.body.removeChild(ta);
+    toast(ok ? '已复制' : '复制失败');
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function () { toast('已复制'); }, fallback);
+  } else { fallback(); }
+}
+
+function refresh() {
+  var pat = localStorage.getItem(LS_PAT);
+  if (!pat) { showToken(''); return; }
+  $('refreshBtn').disabled = true;
+  fetch(API, {
+    headers: {
+      'Authorization': 'Bearer ' + pat,
+      'Accept': 'application/vnd.github.raw+json',
+      'X-GitHub-Api-Version': '2022-11-28'
+    }
+  }).then(function (res) {
+    if (res.status === 401 || res.status === 403) {
+      localStorage.removeItem(LS_PAT);
+      showToken('token 无效或已过期，请重新输入');
+      return null;
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function (data) {
+    if (data === null) return;
+    if (!data || !Array.isArray(data.quotes)) throw new Error('数据格式异常');
+    quotes = data.quotes;
+    updated = data.updated || '';
+    fetchedAt = new Date().toISOString();
+    try {
+      localStorage.setItem(LS_CACHE, JSON.stringify({ fetchedAt: fetchedAt, updated: updated, quotes: quotes }));
+    } catch (e) { /* 存不下就只用内存 */ }
+    hideBanner();
+    showList();
+    render();
+  }).catch(function (e) {
+    if (quotes.length) {
+      showList();
+      render();
+      showBanner('刷新失败（' + e.message + '），显示缓存 · 拉取于 ' + fmt(fetchedAt));
+    } else {
+      showToken('拉取失败：' + e.message + '（检查网络后重试）');
+    }
+  }).finally(function () {
+    $('refreshBtn').disabled = false;
+  });
+}
+
+$('tokenSave').addEventListener('click', function () {
+  var v = $('tokenInput').value.trim();
+  if (!v) { $('tokenErr').textContent = '先粘贴 token'; return; }
+  localStorage.setItem(LS_PAT, v);
+  showList();
+  refresh();
+});
+$('tokenInput').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') $('tokenSave').click();
+});
+$('search').addEventListener('input', render);
+$('refreshBtn').addEventListener('click', refresh);
+
+/* ---- init ---- */
+(function () {
+  var hasCache = loadCache();
+  var pat = localStorage.getItem(LS_PAT);
+  if (!pat) { showToken(''); return; }
+  showList();
+  if (hasCache) render();
+  refresh();
+})();
+</script>
+</body>
+</html>
